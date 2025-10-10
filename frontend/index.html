@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Network Traffic Classifier Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for visualization and aesthetics */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0d1117; /* Dark background */
+        }
+        #visualizationCanvas {
+            border: 2px solid #28a745;
+            box-shadow: 0 0 15px rgba(40, 167, 69, 0.7); /* Green glow */
+            image-rendering: pixelated; /* Ensures clear, blocky pixels */
+        }
+        .result-box {
+            background-color: #161b22;
+            border-left: 5px solid #28a745;
+        }
+        .btn-run {
+            background-color: #28a745;
+            transition: all 0.2s;
+        }
+        .btn-run:hover {
+            background-color: #218838;
+            box-shadow: 0 4px 15px rgba(40, 167, 69, 0.4);
+        }
+        .btn-upload {
+            background-color: #4a5568;
+            transition: all 0.2s;
+        }
+        .btn-upload:hover {
+            background-color: #2d3748;
+        }
+    </style>
+</head>
+<body class="p-8 text-gray-100">
+
+    <div class="max-w-4xl mx-auto">
+        <h1 class="text-4xl font-extrabold text-center mb-6 text-green-400">
+            Packet-to-Image Classifier Dashboard
+        </h1>
+        <p class="text-center text-gray-400 mb-8">
+            Visualize how raw network traffic data is converted into a 224x224 "image" tensor for deep learning classification.
+        </p>
+
+        <div class="flex flex-col md:flex-row gap-8">
+            <div class="md:w-1/2 bg-gray-800 p-6 rounded-xl shadow-lg">
+                <h2 class="text-xl font-semibold mb-4 text-green-300">Image Tensor Representation (224x224x3)</h2>
+                <div class="flex justify-center">
+                    <canvas id="visualizationCanvas" width="224" height="224" class="w-full h-auto max-w-sm"></canvas>
+                </div>
+                <p class="text-sm text-gray-500 mt-4 text-center">
+                    The visualization shows the processed image/packet data that the model classifies.
+                </p>
+            </div>
+
+            <div class="md:w-1/2 flex flex-col gap-6">
+                
+                <h2 class="text-xl font-semibold text-green-300">Actions</h2>
+
+                <button id="runSimulationBtn" class="btn-run text-white font-bold py-3 px-6 rounded-lg shadow-xl uppercase tracking-wider">
+                    Run Simulated Packet Classification
+                </button>
+
+                <div class="bg-gray-700 p-4 rounded-lg shadow-md">
+                    <label class="block text-white font-medium mb-2">Upload Image for Classification</label>
+                    <input type="file" id="imageUpload" accept="image/*" class="w-full text-sm text-gray-200 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-gray-800 file:text-gray-300 hover:file:bg-gray-600"/>
+                    <p class="text-xs text-gray-400 mt-2">Any image uploaded will be resized to 224x224 and classified.</p>
+                </div>
+
+                
+                <div id="resultsPanel" class="result-box p-6 rounded-lg shadow-lg hidden">
+                    <h2 class="text-xl font-semibold mb-4 text-green-300">Classification Results</h2>
+                    <div id="loadingIndicator" class="text-yellow-400 font-semibold mb-4 hidden">
+                        Processing... Please wait for inference.
+                    </div>
+                    
+                    <div class="grid grid-cols-2 gap-4 text-sm">
+                        <p class="font-medium text-gray-400">Source:</p>
+                        <p id="sourceType" class="font-bold text-lg text-white">N/A</p>
+
+                        <p class="font-medium text-gray-400">Simulated Type (if any):</p>
+                        <p id="simulatedType" class="font-bold text-base text-gray-300">N/A</p>
+                        
+                        <p class="font-medium text-gray-400">Predicted Class:</p>
+                        <p id="predictedClass" class="font-bold text-xl text-green-300">N/A</p>
+                        
+                        <p class="font-medium text-gray-400">Confidence:</p>
+                        <p id="confidence" class="font-mono text-white">N/A</p>
+                        
+                        <p class="font-medium text-gray-400 hidden" id="matchLabel">Simulation Match:</p>
+                        <p id="matchStatus" class="font-bold text-white hidden"></p>
+                    </div>
+                </div>
+
+                <div id="errorPanel" class="bg-red-900/50 text-red-300 p-4 rounded-lg border border-red-700 hidden">
+                    <p class="font-bold mb-1">Error:</p>
+                    <p id="errorMessage"></p>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const IMG_SIZE = 224;
+        const IMG_CHANNELS = 3;
+        const canvas = document.getElementById('visualizationCanvas');
+        const ctx = canvas.getContext('2d');
+        const simBtn = document.getElementById('runSimulationBtn');
+        const fileInput = document.getElementById('imageUpload');
+        const resultsPanel = document.getElementById('resultsPanel');
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        const errorPanel = document.getElementById('errorPanel');
+        const errorMessage = document.getElementById('errorMessage');
+        const matchLabel = document.getElementById('matchLabel');
+        const matchStatus = document.getElementById('matchStatus');
+        const simulatedType = document.getElementById('simulatedType');
+
+        function drawTensorOnCanvas(tensorData) {
+            // ... (Drawing logic remains the same)
+            if (!tensorData || tensorData.length !== IMG_SIZE * IMG_SIZE * IMG_CHANNELS) {
+                console.error("Invalid tensor data for drawing.");
+                return;
+            }
+
+            const imageData = ctx.createImageData(IMG_SIZE, IMG_SIZE);
+            const data = imageData.data;
+            let tensorIndex = 0;
+
+            for (let i = 0; i < IMG_SIZE * IMG_SIZE; i++) {
+                const r = tensorData[tensorIndex++] * 255;
+                const g = tensorData[tensorIndex++] * 255;
+                const b = tensorData[tensorIndex++] * 255;
+                
+                const dataIndex = i * 4;
+                
+                data[dataIndex] = r;      
+                data[dataIndex + 1] = g;  
+                data[dataIndex + 2] = b;  
+                data[dataIndex + 3] = 255;
+            }
+
+            ctx.putImageData(imageData, 0, 0);
+        }
+
+        function resetUI(source) {
+            ctx.clearRect(0, 0, IMG_SIZE, IMG_SIZE);
+            ctx.fillStyle = '#161b22'; 
+            ctx.fillRect(0, 0, IMG_SIZE, IMG_SIZE);
+
+            resultsPanel.classList.add('hidden');
+            errorPanel.classList.add('hidden');
+            loadingIndicator.classList.remove('hidden');
+
+            simBtn.disabled = source === 'SIMULATION';
+            fileInput.disabled = source === 'UPLOAD';
+
+            // Reset simulation-specific fields
+            matchLabel.classList.add('hidden');
+            matchStatus.classList.add('hidden');
+            simulatedType.textContent = 'N/A';
+        }
+
+        function updateResults(data) {
+            document.getElementById('sourceType').textContent = data.source;
+            document.getElementById('predictedClass').textContent = data.predicted_class;
+            document.getElementById('confidence').textContent = `P: ${data.confidence}`;
+
+            if (data.source === 'Simulation') {
+                simulatedType.textContent = data.simulated_type;
+                    // Show match status labels
+                matchLabel.classList.remove('hidden');
+                matchStatus.classList.remove('hidden');
+
+                if (data.simulated_type === data.predicted_class) {
+                    matchStatus.innerHTML = '✅ MATCH';
+                    matchStatus.classList.remove('text-red-400');
+                    matchStatus.classList.add('text-green-400');
+                } else {
+                    matchStatus.innerHTML = '❌ MISMATCH';
+                    matchStatus.classList.remove('text-green-400');
+                    matchStatus.classList.add('text-red-400');
+                }
+        } else {
+            // --- CORRECTED LOGIC FOR UPLOAD ---
+            simulatedType.textContent = 'N/A (User Upload)';
+            // Hide match status labels, as there is no 'correct' type for an upload
+            matchLabel.classList.add('hidden');
+            matchStatus.classList.add('hidden');
+}
+            drawTensorOnCanvas(data.tensor_data);
+            resultsPanel.classList.remove('hidden');
+        }
+
+        async function runClassification(endpoint, method, payload = null) {
+            let source = (endpoint === '/classify_proxy') ? 'SIMULATION' : 'UPLOAD';
+            resetUI(source);
+            
+            try {
+                const response = await fetch(endpoint, {
+                    method: method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: payload ? JSON.stringify(payload) : null
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                
+                if (data.status === 'error') {
+                    throw new Error(data.error);
+                }
+
+                updateResults(data);
+
+            } catch (e) {
+                console.error("Classification failed:", e);
+                errorMessage.textContent = e.message || "An unknown error occurred during classification.";
+                errorPanel.classList.remove('hidden');
+            } finally {
+                loadingIndicator.classList.add('hidden');
+                simBtn.disabled = false;
+                fileInput.disabled = false;
+            }
+        }
+
+        // --- Event Listeners ---
+
+        // 1. Simulation Button Click
+        simBtn.addEventListener('click', () => {
+            runClassification('/classify_proxy', 'GET');
+        });
+
+        // 2. Image File Upload
+        fileInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+
+            reader.onload = (e) => {
+                // Get Base64 string from reader result
+                const imageData = e.target.result;
+
+                // Send Base64 data to the upload proxy
+                runClassification('/classify_upload', 'POST', { image_data: imageData });
+            };
+
+            reader.readAsDataURL(file);
+        });
+
+        // Initialize canvas on load
+        ctx.fillStyle = '#161b22'; 
+        ctx.fillRect(0, 0, IMG_SIZE, IMG_SIZE);
+    </script>
+</body>
+</html>
