@@ -7,11 +7,11 @@ services:
       context: ./mobile_net_classifier
       dockerfile: Dockerfile
     container_name: mobile-net-classifier
-    # Service runs on port 5000 (internal network only)
+# Service runs on port 5000 (internal network only)
     command: ["flask", "run", "--host=0.0.0.0", "--port=5000"]
-    # Mount the 'data-volume' so the model can be loaded from disk later
     volumes:
-      - data-volume:/app/data/ 
+      # Volume to save the final model file so it persists across runs
+      - ./data/model:/app/data/model
     restart: always
 
   # 2. Packet Agent API Service (Converts data and calls classifier) 
@@ -20,7 +20,7 @@ services:
       context: ./packet_agent
       dockerfile: Dockerfile
     container_name: packet-agent
-    # Service runs on port 5001 (internal network only)
+# Service runs on port 5001 (internal network only)
     command: ["python", "agent.py"]
     depends_on:
     - mobile-net-classifier
@@ -32,7 +32,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: frontend
-    # Expose to host machine so you can view it at http://localhost:8080
+# Expose to host machine so you can view it at http://localhost:8080
     ports:
     - "8080:8080"
     depends_on:
@@ -49,18 +49,24 @@ services:
     - packet-agent
     restart: always
 
-  # 5. NEW: Data Preparation Service (Processes PCAP data for training)
+  # 5. Data Preparation Service (Converts PCAP to Tensors)
   data-preparator:
     build:
       context: ./data_preparator
       dockerfile: Dockerfile
     container_name: data-preparator
-    # Mount the data volume. The script will save processed data here.
     volumes:
-      - data-volume:/app/processed_data 
-    # This service runs its command (prepare.py) and then exits.
-    restart: "no" 
-    
-# Define the Docker volume for persistent storage across containers
-volumes:
-  data-volume:
+      # Shared volume for the raw input PCAP and the processed tensor output
+      - ./data:/app
+    # Note: We run this manually using 'docker compose run'
+
+  # 6. Model Training Service (Trains the MobileNetV2 model)
+  traffic-trainer:
+    build:
+      context: ./traffic_trainer
+      dockerfile: Dockerfile
+    container_name: traffic-trainer
+    volumes:
+      # Shared volume to read processed data and write the final model file
+      - ./data:/app/data
+    # Note: We run this manually using 'docker compose run'
