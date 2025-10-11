@@ -1,161 +1,136 @@
 import os
+import glob
 import numpy as np
-from scapy.all import rdpcap, IP, TCP, UDP, Raw
+from scapy.all import rdpcap # Scapy is essential for reading PCAP files
 
-# --- Configuration (Must match the classifier's expected input) ---
-# Note: The Classifier (MobileNetV2) expects a tensor of size 224x224x3 (150528 elements)
+# --- Configuration (Must match train.py and agent.py) ---
 IMG_SIZE = 224
 IMG_CHANNELS = 3
 TENSOR_FLATTENED_SIZE = IMG_SIZE * IMG_SIZE * IMG_CHANNELS # 150528
 
-# Define the root directory for saving prepared data (mounted to the Docker volume)
-DATA_OUTPUT_ROOT = '/app/processed_data' 
-INPUT_PCAP_FILE = 'monday_traffic.pcap' # Assuming you place your downloaded file here
+# Define input and output directories inside the Docker container
+INPUT_PCAP_DIR = '/app/raw_pcaps'
+OUTPUT_TENSOR_DIR = '/app/processed_data'
 
-# Define the classification mapping based on common ports
-# Only packets matching these protocols will be saved. Others are skipped.
-PROTOCOL_MAP = {
-    # Port 80
-    80: 'HTTP',
-    # Port 53 (DNS)
-    53: 'DNS',
-    # Port 22 (SSH)
-    22: 'SSH',
-    # We will exclude 'UNKNOWN' for now, focusing only on labeled data for training
-}
-# Define the final classes for the model
-CLASSES = ['HTTP', 'DNS', 'SSH']
-NUM_PACKETS_TO_PROCESS = 10000 # Limit processing for faster debugging
+# --- Core Functions ---
 
-def get_protocol_label(packet):
+def process_raw_to_tensor(raw_bytes):
     """
-    Analyzes the packet to determine its application-layer protocol based on ports.
+    Converts raw bytes to a 1D tensor of fixed size (150528 elements).
+    Pads with zeros or truncates to fit the required size.
+    This function is identical to the one used in train.py for consistency.
+    """
+    padding_size = TENSOR_FLATTENED_SIZE - len(raw_bytes)
     
-    Args:
-        packet: A Scapy packet object.
-    
-    Returns:
-        The protocol label string (e.g., 'HTTP', 'DNS', 'SSH') or None if not classified.
-    """
-    try:
-        if IP in packet:
-            # Check for TCP protocols
-            if TCP in packet:
-                dport = packet[TCP].dport
-                sport = packet[TCP].sport
-                # Check both source and destination port
-                if dport in PROTOCOL_MAP:
-                    return PROTOCOL_MAP[dport]
-                if sport in PROTOCOL_MAP:
-                    return PROTOCOL_MAP[sport]
-            
-            # Check for UDP protocols
-            elif UDP in packet:
-                dport = packet[UDP].dport
-                sport = packet[UDP].sport
-                # Check both source and destination port for DNS (Port 53)
-                if dport == 53 or sport == 53:
-                    return 'DNS' # DNS usually uses UDP
-        
-        return None
-    except Exception as e:
-        # print(f"Error parsing packet: {e}")
-        return None
-
-
-def extract_and_convert(packet_bytes):
-    """
-    Converts raw packet bytes into the flattened tensor format required by the model.
-    """
-    raw_bytes = bytes(packet_bytes)
-    num_bytes = len(raw_bytes)
-    target_size = TENSOR_FLATTENED_SIZE
-    
-    # 1. Pad or Truncate bytes to match the required flattened tensor size (150528)
-    if num_bytes < target_size:
-        # Pad with zeros if packet is too small
-        padded_bytes = raw_bytes + b'\x00' * (target_size - num_bytes)
+    if padding_size > 0:
+        # Pad with zeros to fill the space
+        final_bytes = raw_bytes + b'\x00' * padding_size
     else:
-        # Truncate if packet is too large
-        padded_bytes = raw_bytes[:target_size]
-        
-    # 2. Convert raw byte values (0-255) to a list of floats
-    tensor_list = [float(b) for b in padded_bytes]
+        # Truncate to fit
+        final_bytes = raw_bytes[:TENSOR_FLATTENED_SIZE]
+
+    # Convert to numpy array of pixel values (0-255)
+    tensor = np.frombuffer(final_bytes, dtype=np.uint8)
+    return tensor
+
+
+def process_pcap_to_tensors(filepath, class_label):
+    """
+    Reads a single PCAP/Log file, extracts raw data,
+    converts it to a tensor, and saves the resulting tensors in a list.
+    """
+    print(f"Reading file: {os.path.basename(filepath)}...")
+    tensors = []
     
-    return tensor_list
-
-
-def save_tensor_to_disk(tensor_list, label, sample_id):
-    """Saves the tensor as a numpy file in the correct labeled directory."""
-    
-    # Create the directory structure: processed_data/HTTP/
-    label_dir = os.path.join(DATA_OUTPUT_ROOT, label)
-    os.makedirs(label_dir, exist_ok=True)
-    
-    # Convert the list back to a numpy array (1D) for saving
-    tensor_array = np.array(tensor_list, dtype=np.float32)
-    
-    # Save the numpy array file
-    filepath = os.path.join(label_dir, f"{label}_{sample_id}.npy")
-    np.save(filepath, tensor_array)
-    
-    # print(f"Saved: {filepath} ({len(tensor_array)} elements)")
-
-
-def main_data_preparation():
-    print("--- Data Preparation Service Starting ---")
-    print(f"Target Tensor Size: {TENSOR_FLATTENED_SIZE} elements")
-
-    # 1. Check for input file
-    if not os.path.exists(INPUT_PCAP_FILE):
-        print(f"\nERROR: Input file '{INPUT_PCAP_FILE}' not found in the directory.")
-        print("Please download a PCAP file (e.g., from CIC-IDS 2017) and name it 'monday_traffic.pcap' in the data_preparator/ directory.")
-        return
-
-    # 2. Load the PCAP file
-    print(f"Loading PCAP file: {INPUT_PCAP_FILE}...")
-    try:
-        packets = rdpcap(INPUT_PCAP_FILE)
-        print(f"Successfully loaded {len(packets)} packets.")
-    except Exception as e:
-        print(f"FATAL ERROR: Could not read PCAP file. Is it corrupted? Error: {e}")
-        return
-
-    # Initialize counters for each class
-    sample_counts = {cls: 0 for cls in CLASSES}
-    
-    # 3. Process packets
-    for i, packet in enumerate(packets):
-        if i >= NUM_PACKETS_TO_PROCESS:
-            print(f"Stopping after processing limit of {NUM_PACKETS_TO_PROCESS} packets.")
-            break
-
-        # A. Determine the protocol label
-        label = get_protocol_label(packet)
-        
-        # B. If classified and has raw data, process it
-        if label and label in CLASSES:
-            try:
-                # Extract the raw packet bytes (including link/network/transport headers)
-                raw_packet_bytes = bytes(packet)
+    if filepath.endswith(('.pcap', '.cap', '.libpcap', '.dmp')):
+        # --- Handle standard PCAP files using scapy ---
+        try:
+            packets = rdpcap(filepath)
+            
+            for packet in packets:
+                raw_bytes = bytes(packet) 
+                if len(raw_bytes) > 0:
+                    tensor = process_raw_to_tensor(raw_bytes)
+                    tensors.append(tensor)
+            print(f"  -> Extracted {len(tensors)} tensors from PCAP.")
+            
+        except Exception as e:
+            print(f"Error processing PCAP {filepath}: {e}")
+            return []
+            
+    elif filepath.endswith(('.log', '.txt')):
+        # --- Handle raw log/payload files (treats entire file as one or more payloads) ---
+        try:
+            with open(filepath, 'rb') as f:
+                # Read the entire file content as raw bytes
+                raw_bytes = f.read()
+            
+            if len(raw_bytes) > 0:
+                # If the log file is massive, we can slice it into multiple tensors.
+                # For Snort log files, it's often best to treat them as individual large packets.
                 
-                # Convert the bytes to the tensor format
-                tensor_list = extract_and_convert(raw_packet_bytes)
+                # --- SIMPLE MODE: Treat file content as a single packet payload ---
+                tensor = process_raw_to_tensor(raw_bytes)
+                tensors.append(tensor)
+                print(f"  -> Extracted 1 tensor from log file (treating as single large payload).")
                 
-                # C. Save the result
-                sample_counts[label] += 1
-                save_tensor_to_disk(tensor_list, label, sample_counts[label])
+                # OPTIONAL: Advanced mode to split a massive log file into chunks
+                # for i in range(0, len(raw_bytes), TENSOR_FLATTENED_SIZE):
+                #     chunk = raw_bytes[i:i + TENSOR_FLATTENED_SIZE]
+                #     tensor = process_raw_to_tensor(chunk)
+                #     tensors.append(tensor)
+                # print(f"  -> Extracted {len(tensors)} tensors from log file (chunked).")
                 
-            except Exception as e:
-                print(f"Warning: Failed to process or save packet {i}. Error: {e}")
-                
-    # 4. Summary
-    print("\n--- Data Preparation Complete ---")
-    print("Summary of samples saved:")
-    for cls, count in sample_counts.items():
-        print(f"  {cls}: {count} samples")
-    print(f"Output saved to the shared volume at: {DATA_OUTPUT_ROOT}")
+            
+        except Exception as e:
+            print(f"Error processing Log file {filepath}: {e}")
+            return []
+            
+    else:
+        print(f"Skipping file: {os.path.basename(filepath)} (Unknown extension).")
 
+    return tensors
+
+
+def main():
+    """Main function to find data files and convert them to NPY files."""
+    os.makedirs(OUTPUT_TENSOR_DIR, exist_ok=True)
+    print("--- Data Preparator Service Started ---")
+    print(f"Looking for data files in: {INPUT_PCAP_DIR}")
+    
+    all_tensors = []
+    
+    # We look for files grouped by class name 
+    for class_label in ['HTTP', 'DNS', 'SSH']:
+        # Search for files starting with the class name, regardless of extension
+        search_pattern = os.path.join(INPUT_PCAP_DIR, f"{class_label}*.*")
+        data_files = glob.glob(search_pattern)
+
+        if not data_files:
+            print(f"Warning: No data files found for class: {class_label}. Skipping.")
+            continue
+            
+        class_tensors = []
+        for data_file in data_files:
+            tensors_from_file = process_pcap_to_tensors(data_file, class_label)
+            class_tensors.extend(tensors_from_file)
+
+        if class_tensors:
+            # Convert the list of tensors to a single NumPy array
+            final_array = np.array(class_tensors, dtype=np.uint8)
+            output_filepath = os.path.join(OUTPUT_TENSOR_DIR, f"{class_label}_real.npy")
+            
+            # Save the final NumPy tensor file
+            np.save(output_filepath, final_array)
+            print(f"\nSuccessfully created and saved tensor file: {output_filepath}")
+            print(f"Shape: {final_array.shape}\n")
+            all_tensors.append(final_array)
+            
+    if not all_tensors:
+        print("No tensors were generated. Please ensure data files are placed in the raw_pcaps directory.")
+    else:
+        total_samples = sum(a.shape[0] for a in all_tensors)
+        print(f"--- Data Preparation Complete. Total tensors created: {total_samples} ---")
 
 if __name__ == '__main__':
-    main_data_preparation()
+    main()
