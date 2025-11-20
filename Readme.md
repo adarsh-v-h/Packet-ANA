@@ -1,100 +1,75 @@
-Network Traffic Classifier Simulation (MobileNetV2 via Docker Compose)
-This project demonstrates a proof-of-concept architecture for classifying network traffic using a deep learning model (MobileNetV2) integrated within a containerized environment using Docker Compose.
+# 🧠 Network Traffic Classifier Simulation (MobileNetV2 via Docker Compose)
 
-The core idea is to treat the raw byte data of a network packet as pixel data, convert it into a fixed-size "image" tensor (224×224×3), and feed it to a pre-trained image classification model for protocol identification.
+A proof-of-concept system that treats raw network packet bytes as image data and classifies them using a deep-learning model inside a fully containerized environment. The architecture demonstrates how network traffic can be reinterpreted as pixel tensors and processed through MobileNetV2 for protocol identification.
 
-🚀 Architecture Overview
-The system is composed of three distinct services running in separate Docker containers, communicating over the internal Docker network:
+---
 
-traffic_gen (Simulated Environment)
+## 📘 Overview
 
-Role: Simulates the continuous presence of network activity, logging arbitrary traffic events to standard output.
+The core idea is simple but ambitious:
 
-Output: Generates log messages to show activity.
+1. Capture or simulate packet bytes.  
+2. Reshape them into a `224×224×3` tensor.  
+3. Normalize, preprocess, and send them to a ML inference server.  
+4. Receive a classification: **HTTP**, **DNS**, **SSH**, or **UNKNOWN**.
 
-packet_agent (Data Processor & Client)
+Three microservices (all Dockerized) work together to create a full simulation of network activity → tensor generation → deep-learning inference.
 
-Role: Simulates packet capture, performs the crucial Byte-to-Image Tensor Conversion, and acts as a client to the Classifier API.
+---
 
-Logic: Truncates/pads raw packet data to 150,528 bytes (224×224×3), normalizes it to 0−1, and sends the flattened list via a POST request to the classifier service.
+## ⚙️ Architecture
 
-classifier (Inference Server)
+The system is composed of **three Docker containers** communicating over an internal network:
 
-Role: Hosts the Keras/MobileNetV2 model and provides a REST API for inference.
+### 🛰️ `traffic_gen` — Simulated Environment
+- Generates continuous fake network activity logs.
+- Represents ambient network traffic.
 
-Logic: Receives the 150,528-element tensor, reshapes it to (1,224,224,3), runs the prediction, and returns the predicted class (HTTP, DNS, SSH, or UNKNOWN).
+### 🧩 `packet_agent` — Packet → Tensor Processor
+- Simulates a packet capture agent.
+- Converts raw bytes into the exact tensor size MobileNetV2 requires:  
+  `224 × 224 × 3 = 150,528` values.
+- Normalizes bytes from `[0–255] → [0–1]`.
+- Sends the tensor to the classifier via HTTP POST.
 
-🛠️ Prerequisites
-To run this project, you must have the following installed:
+### 🧠 `classifier` — ML Inference API
+- Flask + TensorFlow/Keras server.
+- Loads MobileNetV2 with a custom classification head.
+- Receives tensor → reshapes → runs inference → returns predicted class.
 
-Docker: (Version 20.10 or later)
+---
 
-Docker Compose: (Usually included in Docker Desktop)
-
-📂 Project Structure
-The files are organized into three service directories and the root configuration file:
-
+## 📂 Project Structure
 .
 ├── docker-compose.yml
 ├── mobile_net_classifier/
-│   ├── Dockerfile
-│   └── app.py            # Flask API, loads MobileNetV2
+│ ├── Dockerfile
+│ └── app.py
 ├── packet_agent/
-│   ├── Dockerfile
-│   └── agent.py          # Byte-to-Tensor conversion, HTTP client
+│ ├── Dockerfile
+│ └── agent.py
 └── traffic_gen/
-    ├── Dockerfile
-    └── traffic_gen.py    # Generates simulated network log messages
+├── Dockerfile
+└── traffic_gen.py
 
-🚀 Getting Started
-Follow these steps to build and run the entire simulation.
 
-1. Build the Docker Images
-From the root directory containing docker-compose.yml, run the build command. This will download the base images and install all Python dependencies (including TensorFlow in the classifier service).
+---
 
+## 🚀 Getting Started
+
+### 1️⃣ Build the project
+```bash
 docker compose build
-
-2. Run the Services
-Start all three services simultaneously in detached mode (-d).
-
+```
+**Run all services**
+```bash
 docker compose up -d
-
-3. Observe the Classification
-To see the entire pipeline working, stream the logs from all three services. The packet_agent service will show the results of its communication with the classifier.
-
+```
+**View logs**
+```bash
 docker compose logs -f
-
-You will see three streams of output:
-
-traffic_gen: Simple logs simulating network activity.
-
-classifier: Logs indicating that the model has been initialized and is receiving requests.
-
-packet_agent: This is the most important output. It shows the simulated traffic type, the tensor size, the request being sent, and the final classification result (e.g., Predicted Class: DNS).
-
-Expected packet_agent output snippet:
-
-[AGENT] Sending simulated HTTP packet data (150528 values) to classifier...
-Classification Result for simulated HTTP:
-  -> Predicted Class: HTTP (Confidence: 0.9812)
-  -> (Simulation Match: ✅ Correct)
-
-4. Stop and Clean Up
-When you are finished, stop the running containers and remove the network:
-
+```
+**Stop everything**
+```bash
 docker compose down
-
-📝 Key Components
-Classifier Model (mobile_net_classifier/app.py)
-The classifier uses a pre-trained MobileNetV2 base model, commonly used in computer vision, but adapted for 4 specific classes (HTTP, DNS, SSH, UNKNOWN).
-
-It's important to note that without actual training data (packet captures labeled as images), the model uses random, untrained weights for the final classification layer. The simulated accuracy in the logs is based on the model's random initial guesses.
-
-The preprocess_input function is crucial, as it scales the 0−1 normalized tensor into the required MobileNetV2 input range of [−1,1].
-
-Packet-to-Tensor Conversion (packet_agent/agent.py)
-This function is the heart of the "Traffic as Image" concept:
-
-Fixed Size: Raw packet bytes are padded or truncated to exactly 150,528 bytes.
-
-Normalization: Bytes (0−255) are converted to floating-point numbers and normalized to the 0−1 range before being sent to the classifier.
+```
