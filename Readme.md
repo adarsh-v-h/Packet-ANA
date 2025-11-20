@@ -39,22 +39,6 @@ The system is composed of **three Docker containers** communicating over an inte
 
 ---
 
-## 📂 Project Structure
-.
-├── docker-compose.yml
-├── mobile_net_classifier/
-│ ├── Dockerfile
-│ └── app.py
-├── packet_agent/
-│ ├── Dockerfile
-│ └── agent.py
-└── traffic_gen/
-├── Dockerfile
-└── traffic_gen.py
-
-
----
-
 ## 🚀 Getting Started
 
 ### 1️⃣ Build the project
